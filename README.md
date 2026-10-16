@@ -60,7 +60,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`fe
 - **Actions → Release → Run workflow:** leave the version empty and it is computed from the commits since the last tag (`feat` → minor, `fix` and others → patch, `type!:` or `BREAKING CHANGE` → major), or type one like `v1.4.0`.
 - **Or push a tag:** `git tag v1.4.0 && git push origin v1.4.0`.
 
-The workflow lints the script, builds a multi-arch image, pushes `X.Y.Z`, `X.Y` and `latest` (only for the newest version) to Docker Hub, smoke-tests it, and creates a GitHub Release with notes grouped by commit type. It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+The workflow lints the script, builds a multi-arch image, pushes `X.Y.Z`, `X.Y`, `X` and `latest` (the floating tags only move for the newest release in their line) to Docker Hub, smoke-tests it, and creates a GitHub Release with notes grouped by commit type. It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
 
 Preview locally: `python3 scripts/release_notes.py next` and `python3 scripts/release_notes.py notes <tag>`.
 

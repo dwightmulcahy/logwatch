@@ -5,7 +5,8 @@ name: Release
 #      conventional commits since the last tag (feat -> minor, fix/other -> patch,
 #      "type!:" / BREAKING CHANGE -> major) unless one is typed in, then tags it.
 #   2. Push a tag yourself: git tag v1.2.3 && git push origin v1.2.3
-# Either way: lint, build a multi-arch image, push it to Docker Hub, and create
+# Either way: lint, test, build a multi-arch image, push it to Docker Hub as
+# X.Y.Z, X.Y, X and latest (floating tags only for the newest in their line), and create
 # a GitHub Release whose notes are grouped by conventional-commit type.
 #
 # Needs repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (Docker Hub access token).
@@ -23,6 +24,9 @@ on:
 permissions:
   contents: write
 
+env:
+  IMAGE: dwightmulcahy/logwatcher
+
 concurrency:
   group: release
   cancel-in-progress: false
@@ -39,11 +43,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Lint
+      - name: Lint and test
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
-          pip install -q pyflakes
+          pip install -q pyflakes -r requirements.txt
           python -m pyflakes logwatch.py scripts/release_notes.py
           python -m py_compile logwatch.py
+          python -m unittest discover -s tests -v
 
       - name: Determine version
         id: version
@@ -72,11 +79,22 @@ jobs:
           git tag -a "$tag" -m "Release $tag"
           git push origin "$tag"
 
-      - name: Is this the newest version?
-        id: latest
+      # Floating tags (latest, M, M.m) only move when this is the newest release
+      # in that line, so patching an old version never drags them backwards.
+      - name: Floating tags
+        id: float
         run: |
-          newest="$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
-          echo "is_latest=$([ "$newest" = "${{ steps.version.outputs.tag }}" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          v="${{ steps.version.outputs.version }}"
+          major="${v%%.*}"; minor="${v%.*}"
+          all="$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')"
+          newest() { grep -m1 -E "^v${1//./\\.}\\." <<<"$all"; }
+          {
+            echo "major=$major"
+            echo "minor=$minor"
+            echo "is_latest=$([ "$(head -1 <<<"$all")" = "v$v" ] && echo true || echo false)"
+            echo "is_major=$([ "$(newest "$major")" = "v$v" ] && echo true || echo false)"
+            echo "is_minor=$([ "$(newest "$minor")" = "v$v" ] && echo true || echo false)"
+          } | tee -a "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -90,11 +108,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/logwatcher
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.version.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.tag }}
-            type=raw,value=latest,enable=${{ steps.latest.outputs.is_latest == 'true' }}
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.float.outputs.minor }},enable=${{ steps.float.outputs.is_minor }}
+            type=raw,value=${{ steps.float.outputs.major }},enable=${{ steps.float.outputs.is_major }}
+            type=raw,value=latest,enable=${{ steps.float.outputs.is_latest }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -110,7 +130,7 @@ jobs:
 
       - name: Smoke test image
         run: |
-          docker run --rm --entrypoint python "${{ secrets.DOCKERHUB_USERNAME }}/logwatcher:${{ steps.version.outputs.version }}" \
+          docker run --rm --entrypoint python "${IMAGE}:${{ steps.version.outputs.version }}" \
             -c "import docker, anthropic, os; print('ok', os.environ['LOGWATCH_VERSION'])"
 
       - name: Create GitHub Release
@@ -121,4 +141,4 @@ jobs:
           cat notes.md
           gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" \
             --notes-file notes.md --verify-tag \
-            $([ "${{ steps.latest.outputs.is_latest }}" = "true" ] && echo --latest || echo --latest=false)
+            $([ "${{ steps.float.outputs.is_latest }}" = "true" ] && echo --latest || echo --latest=false)
