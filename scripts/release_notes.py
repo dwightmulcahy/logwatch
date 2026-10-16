@@ -56,13 +56,13 @@ def notes(tag):
     ref = tag if tag in all_tags else "HEAD"
     rng = f"{prev}..{ref}" if prev else ref
     buckets = {}
-    for subject, _ in reversed(commits(rng)):
+    for subject, body in reversed(commits(rng)):
         m = CC_RE.match(subject.strip())
         kind = m.group(1).lower() if m and m.group(1).lower() in KNOWN else "other"
         msg = m.group(4) if m and kind != "other" else subject.strip()
         scope = m.group(2)[1:-1] if m and m.group(2) and kind != "other" else None
         msg = msg[:1].upper() + msg[1:]
-        if m and m.group(3):
+        if (m and m.group(3)) or "BREAKING CHANGE" in body:
             msg = f"**BREAKING:** {msg}"
         buckets.setdefault(kind, []).append(f"- {f'**{scope}:** ' if scope else ''}{msg}")
     out = []
