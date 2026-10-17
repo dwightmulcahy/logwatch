@@ -121,6 +121,8 @@ Preview locally: `python3 scripts/release_notes.py next` and `python3 scripts/re
 | `Z_THRESHOLD` | `3` | Standard deviations above the mean that trigger a WARN |
 | `Z_MIN_ABS` | `5` | Minimum absolute increase over the mean that triggers a WARN |
 | `MAX_LINES` | `1500` | Log lines sent to Claude (middle trimmed beyond this) |
+| `CLAUDE_MAX_INPUT_CHARS` | `80000` | Hard cap on the Claude prompt size in characters (minimum 20000) |
+| `CLAUDE_MAX_LOG_LINE_CHARS` | `2000` | Each log line sent to Claude is clipped to this many characters (minimum 256) |
 
 ### Bot detection
 
