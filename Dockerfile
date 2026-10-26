@@ -8,7 +8,10 @@ ENV LOGWATCH_VERSION=${VERSION} \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# pip/setuptools/ensurepip aren't needed at runtime and carry most of the scanner findings.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y pip setuptools \
+    && python -c "import shutil, sysconfig; from pathlib import Path; shutil.rmtree(Path(sysconfig.get_path('stdlib')) / 'ensurepip', ignore_errors=True)"
 COPY logwatch.py .
 
 LABEL org.opencontainers.image.title="logwatcher" \
