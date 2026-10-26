@@ -5,11 +5,14 @@ name: Release
 #      conventional commits since the last tag (feat -> minor, fix/other -> patch,
 #      "type!:" / BREAKING CHANGE -> major) unless one is typed in, then tags it.
 #   2. Push a tag yourself: git tag v1.2.3 && git push origin v1.2.3
-# Either way: lint, test, build a multi-arch image, push it to Docker Hub as
-# X.Y.Z, X.Y, X and latest (floating tags only for the newest in their line), and create
-# a GitHub Release whose notes are grouped by conventional-commit type.
+#      (a suffix such as v1.3.0-rc.1 makes a prerelease: no floating tags, not "latest").
+# Either way: the commit must be on main, the full CI suite runs, a multi-arch image
+# (with provenance + SBOM) is pushed to Docker Hub as X.Y.Z, X.Y, X and latest
+# (floating tags only for the newest in their line), and a GitHub Release is created
+# or refreshed with notes grouped by conventional-commit type.
 #
-# Needs repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (Docker Hub access token).
+# Needs repo secret DOCKERHUB_TOKEN and the Docker Hub username as repo variable
+# DOCKERHUB_USERNAME (the old secret of the same name is still used as a fallback).
 
 on:
   push:
@@ -21,124 +24,174 @@ on:
         required: false
         default: ""
 
+concurrency:
+  group: release
+  cancel-in-progress: false   # never abort a half-published release
+
 permissions:
-  contents: write
+  contents: read
 
 env:
   IMAGE: dwightmulcahy/logwatcher
 
-concurrency:
-  group: release
-  cancel-in-progress: false
-
 jobs:
-  release:
+  validate:
+    name: Full CI suite
+    uses: ./.github/workflows/ci.yml
+
+  prepare:
+    name: Verify on main, pick version, tag
+    needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: write          # pushes the tag on manual runs
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      minor: ${{ steps.float.outputs.minor }}
+      major: ${{ steps.float.outputs.major }}
+      is_latest: ${{ steps.float.outputs.is_latest }}
+      is_major: ${{ steps.float.outputs.is_major }}
+      is_minor: ${{ steps.float.outputs.is_minor }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Lint and test
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
+      - name: Commit must be reachable from origin/main
         run: |
-          pip install -q pyflakes -r requirements.txt
-          python -m pyflakes logwatch.py scripts/release_notes.py
-          python -m py_compile logwatch.py
-          python -m unittest discover -s tests -v
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"; exit 1
+          fi
 
       - name: Determine version
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
+          set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             v="${GITHUB_REF_NAME}"
-          elif [ -n "${{ inputs.version }}" ]; then
-            v="${{ inputs.version }}"
+          elif [ -n "${INPUT_VERSION}" ]; then
+            v="${INPUT_VERSION}"
           else
             v="$(python3 scripts/release_notes.py next)"
           fi
-          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Bad version: $v"; exit 1; }
-          echo "tag=$v" >> "$GITHUB_OUTPUT"
-          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
-          echo "Releasing $v"
+          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "Bad version: $v"; exit 1; }
+          [[ "$v" == *-* ]] && pre=true || pre=false
+          { echo "tag=$v"; echo "version=${v#v}"; echo "prerelease=$pre"; } | tee -a "$GITHUB_OUTPUT"
 
       - name: Create tag (manual runs)
         if: github.ref_type != 'tag'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          tag="${{ steps.version.outputs.tag }}"
-          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "Tag $tag already exists"; exit 1
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists"; exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$tag" -m "Release $tag"
-          git push origin "$tag"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
 
-      # Floating tags (latest, M, M.m) only move when this is the newest release
+      # Floating tags (latest, M, M.m) only move when this is the newest stable release
       # in that line, so patching an old version never drags them backwards.
       - name: Floating tags
         id: float
+        env:
+          V: ${{ steps.version.outputs.version }}
+          PRE: ${{ steps.version.outputs.prerelease }}
         run: |
-          v="${{ steps.version.outputs.version }}"
-          major="${v%%.*}"; minor="${v%.*}"
+          major="${V%%.*}"; minor="${V%.*}"
           all="$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')"
           newest() { grep -m1 -E "^v${1//./\\.}\\." <<<"$all"; }
+          is() { [ "$PRE" = "false" ] && [ "$1" = "v$V" ] && echo true || echo false; }
           {
             echo "major=$major"
             echo "minor=$minor"
-            echo "is_latest=$([ "$(head -1 <<<"$all")" = "v$v" ] && echo true || echo false)"
-            echo "is_major=$([ "$(newest "$major")" = "v$v" ] && echo true || echo false)"
-            echo "is_minor=$([ "$(newest "$minor")" = "v$v" ] && echo true || echo false)"
+            echo "is_latest=$(is "$(head -1 <<<"$all")")"
+            echo "is_major=$(is "$(newest "$major")")"
+            echo "is_minor=$(is "$(newest "$minor")")"
           } | tee -a "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-
-      - uses: docker/login-action@v4
+  docker:
+    name: Publish multi-arch image
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Image tags
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=raw,value=${{ steps.version.outputs.version }}
-            type=raw,value=${{ steps.float.outputs.minor }},enable=${{ steps.float.outputs.is_minor }}
-            type=raw,value=${{ steps.float.outputs.major }},enable=${{ steps.float.outputs.is_major }}
-            type=raw,value=latest,enable=${{ steps.float.outputs.is_latest }}
-
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=raw,value=${{ needs.prepare.outputs.minor }},enable=${{ needs.prepare.outputs.is_minor }}
+            type=raw,value=${{ needs.prepare.outputs.major }},enable=${{ needs.prepare.outputs.is_major }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.is_latest }}
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ steps.version.outputs.tag }}
+          build-args: VERSION=${{ needs.prepare.outputs.tag }}
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Smoke test image
+      - name: Smoke test published image
         run: |
-          docker run --rm --entrypoint python "${IMAGE}:${{ steps.version.outputs.version }}" \
+          docker run --rm --entrypoint python "${IMAGE}:${{ needs.prepare.outputs.version }}" \
             -c "import docker, anthropic, os; print('ok', os.environ['LOGWATCH_VERSION'])"
 
-      - name: Create GitHub Release
+  release:
+    name: GitHub Release
+    needs: [prepare, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Create or update release (idempotent on rerun)
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRE: ${{ needs.prepare.outputs.prerelease }}
+          IS_LATEST: ${{ needs.prepare.outputs.is_latest }}
         run: |
-          python3 scripts/release_notes.py notes "${{ steps.version.outputs.tag }}" > notes.md
-          cat notes.md
-          gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" \
-            --notes-file notes.md --verify-tag \
-            $([ "${{ steps.float.outputs.is_latest }}" = "true" ] && echo --latest || echo --latest=false)
+          set -euo pipefail
+          git fetch --tags --force origin
+          python3 scripts/release_notes.py notes "$TAG" > notes.md
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+          flags=(--title "$TAG" --notes-file notes.md)
+          if [[ "$PRE" == "true" ]]; then
+            flags+=(--prerelease --latest=false)
+          elif [[ "$IS_LATEST" == "true" ]]; then
+            flags+=(--latest)
+          else
+            flags+=(--latest=false)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; refreshing notes"
+            gh release edit "$TAG" "${flags[@]}"
+          else
+            gh release create "$TAG" --verify-tag "${flags[@]}"
+          fi

@@ -51,9 +51,15 @@ def next_version():
 
 
 def notes(tag):
-    all_tags = tags()
-    prev = next((t for t in all_tags[all_tags.index(tag) + 1:]), None) if tag in all_tags else (all_tags[0] if all_tags else None)
-    ref = tag if tag in all_tags else "HEAD"
+    base = re.match(r"^v(\d+)\.(\d+)\.(\d+)", tag)
+    if not base:
+        sys.exit(f"Not a version tag: {tag}")
+    current = tuple(map(int, base.groups()))
+    # Previous = newest stable tag below this one (prereleases compare by their X.Y.Z).
+    prev = next((t for t in tags() if tuple(map(int, TAG_RE.match(t).groups())) < current), None)
+    exists = subprocess.run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
+                            capture_output=True).returncode == 0
+    ref = tag if exists else "HEAD"
     rng = f"{prev}..{ref}" if prev else ref
     buckets = {}
     for subject, body in reversed(commits(rng)):
