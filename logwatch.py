@@ -15,6 +15,7 @@ import re
 import smtplib
 import socket
 import statistics
+import sys
 import time
 import traceback
 import urllib.request
@@ -35,6 +36,8 @@ MAX_LINES = int(os.getenv("MAX_LINES", "1500"))
 CLAUDE_MAX_INPUT_CHARS = max(20000, int(os.getenv("CLAUDE_MAX_INPUT_CHARS", "80000")))
 CLAUDE_MAX_LOG_LINE_CHARS = max(256, int(os.getenv("CLAUDE_MAX_LOG_LINE_CHARS", "2000")))
 STATE_FILE = os.getenv("STATE_FILE", "/data/state.json")
+# Touched by the scheduler loop; the Docker HEALTHCHECK fails when it goes stale.
+HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", "/data/heartbeat")
 SEND_IF_CLEAR = os.getenv("SEND_IF_CLEAR", "1") == "1"
 
 # Per-app identity (defaults keep the original brewwatersolver behaviour)
@@ -431,7 +434,9 @@ def digest(lines):
         kept = kept[:half] + [f"... {omitted} lines omitted ..."] + kept[-half:]
 
     external = {c: n for c, n in clients.items() if c and c not in ("127.0.0.1", "::1")}
-    count = lambda lo, hi: sum(v for k, v in status.items() if isinstance(k, int) and lo <= k < hi)
+    def count(lo, hi):
+        return sum(v for k, v in status.items() if isinstance(k, int) and lo <= k < hi)
+
     summary = {
         "total_lines": len(lines),
         "non_json_lines": non_json,
@@ -479,7 +484,10 @@ def digest(lines):
 # ---------- rules ----------
 def evaluate(summary, metrics, meta, state, lines_total):
     flags = []
-    add = lambda sev, msg: flags.append((sev, msg))
+
+    def add(sev, msg):
+        flags.append((sev, msg))
+
     h = summary["health"]
 
     if lines_total == 0:
@@ -912,7 +920,7 @@ def run_once():
             claude_error = str(ex)
             report = f"[Claude analysis failed: {ex}; rule report follows]\n\n" + report
 
-    status_line = next(l for l in report.splitlines() if l.startswith("STATUS:")).replace("STATUS:", "").strip()
+    status_line = next(line for line in report.splitlines() if line.startswith("STATUS:")).replace("STATUS:", "").strip()
     if w > 0 or SEND_IF_CLEAR:
         html = render_html(summary, metrics, flags, meta, start, end, status_line,
                            claude_text, claude_error, coverage_h)
@@ -932,6 +940,29 @@ def next_run():
     return target if target > now else target + dt.timedelta(days=1)
 
 
+def heartbeat():
+    try:
+        with open(HEARTBEAT_FILE, "a"):
+            os.utime(HEARTBEAT_FILE)
+    except OSError as ex:
+        print(f"heartbeat failed: {ex}", flush=True)
+
+
+def healthcheck():
+    """Exit code for the Docker HEALTHCHECK: 0 while the scheduler loop is alive."""
+    # The loop wakes at least every HOME_IP_CHECK_MIN; allow two missed wakes plus a slow run.
+    limit = 2 * HOME_IP_CHECK_MIN * 60 + 900
+    try:
+        age = time.time() - os.path.getmtime(HEARTBEAT_FILE)
+    except OSError:
+        print(f"no heartbeat at {HEARTBEAT_FILE}", flush=True)
+        return 1
+    if age > limit:
+        print(f"heartbeat stale: {age:.0f}s > {limit}s", flush=True)
+        return 1
+    return 0
+
+
 def safe_run():
     try:
         run_once()
@@ -945,6 +976,9 @@ def safe_run():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--healthcheck"]:
+        sys.exit(healthcheck())
+    heartbeat()
     print(f"logwatch {VERSION}: watching {CONTAINER} as {APP}, mode={MODE}, daily at {RUN_AT}", flush=True)
     if os.getenv("RUN_ON_START") == "1":
         safe_run()
@@ -953,6 +987,7 @@ if __name__ == "__main__":
         print(f"next run {target.isoformat()}", flush=True)
         while (remaining := (target - dt.datetime.now(TZ)).total_seconds()) > 0:
             time.sleep(min(remaining, HOME_IP_CHECK_MIN * 60))
+            heartbeat()
             if AUTO_IGNORE_HOME and dt.datetime.now(TZ) < target:
                 try:
                     st = load_state()
@@ -961,3 +996,4 @@ if __name__ == "__main__":
                 except Exception:
                     print(traceback.format_exc(), flush=True)
         safe_run()
+        heartbeat()
