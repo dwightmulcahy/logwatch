@@ -12,14 +12,19 @@ import ipaddress
 import json
 import os
 import re
+import signal
 import smtplib
 import socket
 import statistics
+import sys
 import time
 import traceback
 import urllib.request
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
+from pathlib import Path
+
+from healthcheck import HEARTBEAT_FILE
 
 import docker
 
@@ -932,7 +937,12 @@ def next_run():
     return target if target > now else target + dt.timedelta(days=1)
 
 
+def heartbeat():
+    Path(HEARTBEAT_FILE).touch()
+
+
 def safe_run():
+    heartbeat()
     try:
         run_once()
     except Exception:
@@ -945,15 +955,21 @@ def safe_run():
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    heartbeat()
     print(f"logwatch {VERSION}: watching {CONTAINER} as {APP}, mode={MODE}, daily at {RUN_AT}", flush=True)
     if os.getenv("RUN_ON_START") == "1":
         safe_run()
+    last_home_check = time.monotonic()
     while True:
         target = next_run()
         print(f"next run {target.isoformat()}", flush=True)
         while (remaining := (target - dt.datetime.now(TZ)).total_seconds()) > 0:
-            time.sleep(min(remaining, HOME_IP_CHECK_MIN * 60))
-            if AUTO_IGNORE_HOME and dt.datetime.now(TZ) < target:
+            time.sleep(min(remaining, 60))
+            heartbeat()
+            if (AUTO_IGNORE_HOME and dt.datetime.now(TZ) < target
+                    and time.monotonic() - last_home_check >= HOME_IP_CHECK_MIN * 60):
+                last_home_check = time.monotonic()
                 try:
                     st = load_state()
                     refresh_home_ips(st)

@@ -3,7 +3,13 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: ["**"]
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,18 +18,65 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
       - name: Install dependencies
-        run: pip install pyflakes -r requirements.txt
+        run: pip install -r requirements-dev.txt
       - name: Lint
-        run: python -m pyflakes logwatch.py scripts/release_notes.py tests
+        run: python -m pyflakes logwatch.py healthcheck.py scripts/release_notes.py tests
       - name: Compile
         run: python -m py_compile logwatch.py scripts/release_notes.py tests/test_claude_prompt_budget.py
       - name: Test
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -m unittest discover -s tests -v
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: cp .env.example .env
+      - run: docker compose --env-file .env.example -f compose.yaml config --quiet
+      - run: docker compose --env-file .env.example -f example.docker-compose.yaml config --quiet
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [test, compose]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          load: true
+          tags: logwatcher:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test hardened container and health check
+        run: |
+          docker run -d --name logwatch-smoke --read-only --tmpfs /tmp \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 100 --memory 256m -e MODE=rules logwatcher:ci
+          for i in $(seq 1 30); do
+            if docker exec logwatch-smoke python /app/healthcheck.py; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Scan for fixable high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
+        with:
+          image-ref: logwatcher:ci
+          exit-code: "1"
+          ignore-unfixed: true
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+      - name: Container logs
+        if: failure()
+        run: docker logs logwatch-smoke
+      - name: Cleanup
+        if: always()
+        run: docker rm -f logwatch-smoke

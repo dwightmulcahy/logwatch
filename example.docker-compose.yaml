@@ -4,6 +4,19 @@ services:
     image: dwightmulcahy/logwatcher:latest
     container_name: webpage-logwatch
     restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 100
+    mem_limit: 512m
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
@@ -12,9 +25,10 @@ services:
 
       # optional: run a local copy of the script instead of the one in the image
       # - /share/Data/config/logwatch/logwatch.py:/app/logwatch.py:ro
+      # - /share/Data/config/logwatch/healthcheck.py:/app/healthcheck.py:ro
 
     # all the secrets so you don't have them published
-    env_file: /share/Data/config/logwatch/.env
+    env_file: ${LOGWATCH_ENV_FILE:-/share/Data/config/logwatch/.env}
 
     environment:
       - TZ=America/Costa_Rica
@@ -39,5 +53,18 @@ services:
       - "8088:8080"
     environment:
       - TZ=America/Costa_Rica
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 100
+    mem_limit: 512m
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
     volumes:
       - /share/Data/config/webpage:/data

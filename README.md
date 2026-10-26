@@ -1,5 +1,9 @@
 # logwatcher
 
+[![CI](https://github.com/dwightmulcahy/logwatcher/actions/workflows/ci.yml/badge.svg)](https://github.com/dwightmulcahy/logwatcher/actions/workflows/ci.yml)
+[![Release](https://github.com/dwightmulcahy/logwatcher/actions/workflows/release.yml/badge.svg)](https://github.com/dwightmulcahy/logwatcher/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Logwatch is a nightly sidecar container that reads a web app's Docker logs, checks errors, latency, uptime gaps and probes, sorts users from search, AI and spoofed bots using published IP ranges, compares against a 14-day baseline, and emails an HTML report, calling Claude for analysis only when something is flagged.
 
 ## What it checks
@@ -51,18 +55,25 @@ The image is `dwightmulcahy/logwatcher` on Docker Hub (amd64 and arm64).
 
 To watch several apps, run one logwatch service per app, each with its own `TARGET_CONTAINER`, `APP_NAME` and `/data` folder. They can share the `.env`.
 
-To try local changes without building an image, mount your copy over the script (`/path/logwatch.py:/app/logwatch.py:ro`). Keep that file `chmod 644`: the container has the Docker socket, so whoever can edit the script can run code as root on the host.
+To try local changes without building an image, mount both `logwatch.py` and `healthcheck.py` into `/app` read-only. Keep that file `chmod 644`: the container has the Docker socket, so whoever can edit the script can run code as root on the host.
 
 ## Releasing
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:` ...), which drive both the version number and the release notes.
 
-- **Actions → Release → Run workflow:** leave the version empty and it is computed from the commits since the last tag (`feat` → minor, `fix` and others → patch, `type!:` or `BREAKING CHANGE` → major), or type one like `v1.4.0`.
-- **Or push a tag:** `git tag v1.4.0 && git push origin v1.4.0`.
+Create version tags manually after merging to main:
 
-The workflow lints the script, builds a multi-arch image, pushes `X.Y.Z`, `X.Y`, `X` and `latest` (the floating tags only move for the newest release in their line) to Docker Hub, smoke-tests it, and creates a GitHub Release with notes grouped by commit type. It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+```bash
+git tag v1.4.0
+git push origin v1.4.0
+```
 
-Preview locally: `python3 scripts/release_notes.py next` and `python3 scripts/release_notes.py notes <tag>`.
+The workflow rejects tags outside main and reruns the shared CI suite before publishing.
+It never computes or creates a version tag. Stable `vM.m.p` tags are supported.
+
+The workflow lints the script, builds a multi-arch image, pushes `X.Y.Z`, `X.Y`, `X` and `latest` (the floating tags only move for the newest release in their line) to Docker Hub, smoke-tests it, and creates a GitHub Release with notes grouped by commit type. Reruns update existing release notes. Images include SBOM and provenance metadata. It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+
+Preview release notes locally: `python3 scripts/release_notes.py notes <tag>`.
 
 ## Settings
 
@@ -144,3 +155,46 @@ Preview locally: `python3 scripts/release_notes.py next` and `python3 scripts/re
 - `docker logs` only reaches back to when the container was created. After a redeploy (e.g. Watchtower) the report says how many hours the logs cover, and days with under 80% coverage are kept out of the baseline.
 - Mounting `/var/run/docker.sock` gives the container root-equivalent access to the host, even with `:ro`.
 - Cost in `hybrid` mode is a few cents on nights when something is flagged and nothing otherwise.
+
+## Development and deployment checks
+
+Use Python 3.14 to match CI and the container:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pyflakes logwatch.py healthcheck.py scripts/release_notes.py tests
+python -m unittest discover -s tests -v
+```
+
+CI validates both Compose examples, builds the image, runs a hardened scheduler
+smoke test, and rejects fixable HIGH/CRITICAL vulnerabilities with Trivy before
+release. External Actions and the multi-architecture Python base are digest/SHA pinned.
+
+For portable local deployment, copy `.env.example` to `.env`, set credentials and
+`TARGET_CONTAINER`/`APP_NAME`, then run `docker compose up -d --build`.
+The QNAP paths are shown in `example.docker-compose.yaml`. Both examples bound
+memory and PIDs, rotate Docker logs (3 × 10 MB), use a read-only root filesystem
+with writable `/data` and `/tmp`, drop capabilities, and set no-new-privileges.
+
+Root is retained for QNAP Docker socket permissions. These restrictions do not
+remove the socket's host-equivalent Docker privileges; see [SECURITY.md](SECURITY.md).
+
+The container health check verifies a scheduler heartbeat, refreshed at least
+once per minute while waiting. It becomes unhealthy after 15 minutes without a
+heartbeat, including a report that stalls that long. This indicates scheduler
+liveness, not successful email delivery or watched-app health. Failed reports
+still print errors and attempt a failure email. Docker health status alone does
+not automatically restart a container.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HEARTBEAT_FILE` | `/tmp/logwatch-heartbeat` | Internal scheduler heartbeat shared with the health check |
+
+SIGTERM exits cleanly; an interrupted report is retried from the previous saved
+state on a subsequent run. Set `RUN_ON_START=1` only for an intentional immediate report.
+
+## License
+
+[MIT](LICENSE). Report vulnerabilities through [SECURITY.md](SECURITY.md).
