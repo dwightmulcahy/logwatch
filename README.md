@@ -45,7 +45,7 @@ The image is `dwightmulcahy/logwatcher` on Docker Hub (amd64 and arm64).
 
 1. Copy `.env.example` to `.env`, fill it in, `chmod 600 .env`.
 2. Create a data folder per watched app, e.g. `mkdir -p /share/Data/config/<app>/logwatch-data`.
-3. Add a service based on [`example.docker-compose.yaml`](example.docker-compose.yaml) and deploy.
+3. Add a service based on [`compose.yaml`](compose.yaml) and deploy. It runs hardened: read-only root filesystem, no Linux capabilities, `no-new-privileges`, memory/PID limits and log rotation. With no capabilities, root can't bypass file permissions, so the `/data` folder must be owned by root (or be writable by uid 0 via its mode).
 4. Check `docker logs -f <logwatch container>`: it prints `logwatch <version>: watching ...`, then `mode=... STATUS: ...` and `next run ...`. Wait for the test email.
 5. Set `RUN_ON_START=0` and redeploy, otherwise every restart or NAS reboot sends another report.
 
@@ -58,11 +58,21 @@ To try local changes without building an image, mount your copy over the script 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:` ...), which drive both the version number and the release notes.
 
 - **Actions → Release → Run workflow:** leave the version empty and it is computed from the commits since the last tag (`feat` → minor, `fix` and others → patch, `type!:` or `BREAKING CHANGE` → major), or type one like `v1.4.0`.
-- **Or push a tag:** `git tag v1.4.0 && git push origin v1.4.0`.
+- **Or push a tag:** `git tag v1.4.0 && git push origin v1.4.0`. A suffix (`v1.4.0-rc.1`) makes a prerelease: no floating tags, not marked latest.
 
-The workflow lints the script, builds a multi-arch image, pushes `X.Y.Z`, `X.Y`, `X` and `latest` (the floating tags only move for the newest release in their line) to Docker Hub, smoke-tests it, and creates a GitHub Release with notes grouped by commit type. It needs the repo secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+The commit must be on `main`. The workflow runs the full CI suite, builds a multi-arch image with provenance and SBOM attestations, pushes `X.Y.Z`, `X.Y`, `X` and `latest` (the floating tags only move for the newest stable release in their line) to Docker Hub, smoke-tests it, and creates the GitHub Release with notes grouped by commit type (re-running refreshes an existing release). It needs the repo secret `DOCKERHUB_TOKEN` and the repo variable `DOCKERHUB_USERNAME` (a secret of that name still works as a fallback).
 
 Preview locally: `python3 scripts/release_notes.py next` and `python3 scripts/release_notes.py notes <tag>`.
+
+## Development
+
+```sh
+pip install -r requirements-dev.txt
+ruff check . && pyflakes logwatch.py scripts tests
+python -m pytest -q
+```
+
+CI runs the same checks on every branch push and pull request, validates `compose.yaml`, builds the image, smoke-tests it under the same hardening as `compose.yaml`, and fails on fixable HIGH/CRITICAL vulnerabilities (Trivy). `tests/test_repository_policy.py` keeps actions pinned to commit SHAs, the base image pinned to a version and digest, and CI's Python in step with the image. Dependabot bumps pip, Docker, Compose and Actions weekly.
 
 ## Settings
 
@@ -138,6 +148,7 @@ Preview locally: `python3 scripts/release_notes.py next` and `python3 scripts/re
 |---|---|---|
 | `STATE_FILE` | `/data/state.json` | Baseline history, last run, restart tracking, home IPs |
 | `BOT_FEED_CACHE` | `/data/bot_ranges.json` | Cached bot ranges |
+| `HEARTBEAT_FILE` | `/data/heartbeat` | Touched by the scheduler loop; the image's `HEALTHCHECK` (`logwatch.py --healthcheck`) reports unhealthy when it is older than 2 × `HOME_IP_CHECK_MIN` + 15 min |
 
 ## Notes
 

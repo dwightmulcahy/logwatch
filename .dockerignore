@@ -1,6 +1,3 @@
-.git
-.github
-.env
-*.md
-example.docker-compose.yaml
-scripts
+*
+!logwatch.py
+!requirements.txt

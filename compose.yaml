@@ -1,6 +1,8 @@
+# Example deployment: logwatch next to the app it watches.
+# CI validates this file with `docker compose config` (LOGWATCH_ENV_FILE=.env).
 services:
   logwatch:
-    # Pin a version (e.g. dwightmulcahy/logwatcher:0.1) or use :latest with Watchtower
+    # Pin a version (e.g. dwightmulcahy/logwatcher:0.2) or use :latest with Watchtower
     image: dwightmulcahy/logwatcher:latest
     container_name: webpage-logwatch
     restart: unless-stopped
@@ -14,14 +16,16 @@ services:
       # - /share/Data/config/logwatch/logwatch.py:/app/logwatch.py:ro
 
     # all the secrets so you don't have them published
-    env_file: /share/Data/config/logwatch/.env
+    env_file:
+      - path: ${LOGWATCH_ENV_FILE:-/share/Data/config/logwatch/.env}
+        required: true
 
     environment:
       - TZ=America/Costa_Rica
       - TARGET_CONTAINER=webpage
       - APP_NAME=webpage
       - APP_DESC=My website
-      - PROBE_IGNORE=^/admin$
+      - PROBE_IGNORE=^/admin$$
       - MODE=hybrid
       - RUN_AT=07:00
       # set to 0 after the first test email arrives
@@ -29,6 +33,22 @@ services:
       - SEND_IF_CLEAR=1
       - AUTO_IGNORE_HOME=1
       - AUTO_IGNORE_LAN=1
+
+    # Hardening: nothing but /data and /tmp is writable, no Linux capabilities.
+    # Without capabilities, root can't override file permissions, so the /data
+    # folder must be owned by root (or be writable by uid 0 through its mode).
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 100
+    mem_limit: 512m
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   webpage:
     image: webpage:latest
