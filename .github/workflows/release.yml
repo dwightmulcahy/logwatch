@@ -179,7 +179,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --tags --force origin
-          python3 scripts/release_notes.py notes "$TAG" > notes.md
+          if [[ "$PRE" == "true" ]]; then
+            python3 scripts/release_notes.py notes "$TAG" > notes.md
+          else
+            python3 scripts/standard_release_notes.py --tag "$TAG" --project-name "Logwatch" --image "$IMAGE" --output notes.md
+          fi
           cat notes.md >> "$GITHUB_STEP_SUMMARY"
           flags=(--title "$TAG" --notes-file notes.md)
           if [[ "$PRE" == "true" ]]; then
