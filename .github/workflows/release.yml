@@ -169,6 +169,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+      - name: Generate standard stable release notes
+        if: needs.prepare.outputs.prerelease != 'true'
+        uses: dwightmulcahy/repo-template/.github/actions/release-notes@f3dc1af2146156866574485a20ded5ac35d08a88
+        with:
+          tag: ${{ needs.prepare.outputs.tag }}
+          project-name: Logwatch
+          image: ${{ env.IMAGE }}
+          output: notes.md
+
       - name: Create or update release (idempotent on rerun)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -181,8 +190,6 @@ jobs:
           git fetch --tags --force origin
           if [[ "$PRE" == "true" ]]; then
             python3 scripts/release_notes.py notes "$TAG" > notes.md
-          else
-            python3 scripts/standard_release_notes.py --tag "$TAG" --project-name "Logwatch" --image "$IMAGE" --output notes.md
           fi
           cat notes.md >> "$GITHUB_STEP_SUMMARY"
           flags=(--title "$TAG" --notes-file notes.md)
