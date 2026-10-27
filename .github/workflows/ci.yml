@@ -20,24 +20,15 @@ env:
 
 jobs:
   test:
-    name: Lint + pytest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements-dev.txt
-      - run: pip install -r requirements-dev.txt
-      - name: Ruff and Pyflakes
-        run: |
-          ruff check .
-          pyflakes logwatch.py scripts tests
-      - name: pytest
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m pytest -q
+    name: Shared Python lint and tests
+    uses: dwightmulcahy/repo-template/.github/workflows/reusable-python-ci.yml@d89e9db45ba77fd32d95da02620476eada9c01cd
+    with:
+      python-version: '3.14'
+      install-command: pip install -r requirements-dev.txt
+      lint-command: |
+        ruff check .
+        pyflakes logwatch.py scripts tests
+      test-command: PYTHONDONTWRITEBYTECODE=1 python -m pytest -q
 
   compose:
     name: Validate Compose file
