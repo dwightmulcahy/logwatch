@@ -1,28 +1,12 @@
 name: Release
 
-# Two ways to release:
-#   1. Actions -> Release -> Run workflow: picks the next version from the
-#      conventional commits since the last tag (feat -> minor, fix/other -> patch,
-#      "type!:" / BREAKING CHANGE -> major) unless one is typed in, then tags it.
-#   2. Push a tag yourself: git tag v1.2.3 && git push origin v1.2.3
-#      (a suffix such as v1.3.0-rc.1 makes a prerelease: no floating tags, not "latest").
-# Either way: the commit must be on main, the full CI suite runs, a multi-arch image
-# (with provenance + SBOM) is pushed to Docker Hub as X.Y.Z, X.Y, X and latest
-# (floating tags only for the newest in their line), and a GitHub Release is created
-# or refreshed with notes grouped by conventional-commit type.
-#
-# Needs repo secret DOCKERHUB_TOKEN and the Docker Hub username as repo variable
-# DOCKERHUB_USERNAME (the old secret of the same name is still used as a fallback).
+# Releases are triggered only by manually created version tags.
+# No workflow creates, increments, or pushes a version tag.
+# Floating Docker aliases are gated independently by release line.
 
 on:
   push:
     tags: ["v*.*.*"]
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to release (e.g. v1.2.0). Leave empty to compute it from commits."
-        required: false
-        default: ""
 
 concurrency:
   group: release
@@ -40,11 +24,11 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   prepare:
-    name: Verify on main, pick version, tag
+    name: Verify existing version tag on main
     needs: validate
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # pushes the tag on manual runs
+      contents: read
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -66,35 +50,14 @@ jobs:
             echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"; exit 1
           fi
 
-      - name: Determine version
+      - name: Validate existing version tag
         id: version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            v="${GITHUB_REF_NAME}"
-          elif [ -n "${INPUT_VERSION}" ]; then
-            v="${INPUT_VERSION}"
-          else
-            v="$(python3 scripts/release_notes.py next)"
-          fi
+          v="${GITHUB_REF_NAME}"
           [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "Bad version: $v"; exit 1; }
           [[ "$v" == *-* ]] && pre=true || pre=false
-          { echo "tag=$v"; echo "version=${v#v}"; echo "prerelease=$pre"; } | tee -a "$GITHUB_OUTPUT"
-
-      - name: Create tag (manual runs)
-        if: github.ref_type != 'tag'
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "Tag $TAG already exists"; exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
+          { echo "tag=$v"; echo "version=${v#v}"; echo "prerelease=$pre"; } >> "$GITHUB_OUTPUT"
 
       # Floating tags (latest, M, M.m) only move when this is the newest stable release
       # in that line, so patching an old version never drags them backwards.
