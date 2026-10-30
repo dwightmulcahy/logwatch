@@ -74,7 +74,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logwatch-rootfs"
           docker export "$container_id" | tar -xf - -C "$RUNNER_TEMP/logwatch-rootfs"
           docker rm "$container_id"
-          find "$RUNNER_TEMP/logwatch-rootfs" -type f \\( -name 'METADATA' -o -name 'PKG-INFO' \\) -print | grep -E '(certifi|msgpack|setuptools|urllib3)' || true
+          find "$RUNNER_TEMP/logwatch-rootfs" -type f -name METADATA -print | grep -E '(certifi|msgpack|setuptools|urllib3)' || true
       - name: Inspect rootfs scan results
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
