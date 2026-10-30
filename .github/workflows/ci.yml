@@ -73,6 +73,18 @@ jobs:
           docker run --rm --entrypoint python "$IMAGE" -m pip list --format=freeze
           docker run --rm --entrypoint sh "$IMAGE" -c 'find /usr/local/lib -iname "*dist-info" -print | grep -E "(certifi|msgpack|setuptools|urllib3)" || true'
           docker image inspect "$IMAGE" --format '{{json .RootFS.Layers}}'
+      - name: Inspect Trivy vulnerability source paths
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.69.3 image --format json --scanners vuln "$IMAGE" > trivy-diagnostic.json || true
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("trivy-diagnostic.json").read_text())
+          for result in report.get("Results", []):
+              for vuln in result.get("Vulnerabilities", []):
+                  if vuln.get("PkgName", "").lower() in {"certifi", "msgpack", "setuptools", "urllib3"}:
+                      print(json.dumps({"target": result.get("Target"), "type": result.get("Type"), "package": vuln.get("PkgName"), "version": vuln.get("InstalledVersion"), "fixed": vuln.get("FixedVersion"), "id": vuln.get("VulnerabilityID"), "layer": vuln.get("Layer")}, sort_keys=True))
+          PY
       - name: Scan image for fixable high and critical vulnerabilities
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
