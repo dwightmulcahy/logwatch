@@ -8,11 +8,33 @@ ENV LOGWATCH_VERSION=${VERSION} \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir --upgrade "setuptools>=78.1.1" \
+RUN python -m pip install --no-cache-dir --upgrade "setuptools>=78.1.1" "certifi>=2026.10.18" \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip check \
-    && python -c 'from importlib.metadata import version; minimums = {"msgpack": (1, 2, 3), "urllib3": (2, 8, 0), "setuptools": (78, 1, 1)}; actual = {name: tuple(map(int, version(name).split(".")[:3])) for name in minimums}; assert all(actual[name] >= minimum for name, minimum in minimums.items()), actual'
+    && python -c 'from importlib.metadata import version; minimums = {"msgpack": (1, 2, 3), "urllib3": (2, 8, 0), "setuptools": (78, 1, 1), "certifi": (2026, 10, 18)}; actual = {name: tuple(map(int, version(name).split(".")[:3])) for name in minimums}; assert all(actual[name] >= minimum for name, minimum in minimums.items()), actual'
 COPY logwatch.py .
+
+# Remove stale package metadata left by the base image's Python installation.
+RUN python - <<'PY'
+from importlib.metadata import distributions
+from pathlib import Path
+
+minimums = {"msgpack": (1, 2, 3), "urllib3": (2, 8, 0), "setuptools": (78, 1, 1), "certifi": (2026, 10, 18)}
+for dist in distributions():
+    name = (dist.metadata.get("Name") or "").lower().replace("_", "-")
+    if name not in minimums:
+        continue
+    parts = dist.version.split(".")[:3]
+    try:
+        version = tuple(map(int, parts))
+    except ValueError:
+        continue
+    if version < minimums[name]:
+        path = Path(str(dist._path))
+        if path.is_dir() and path.name.endswith((".dist-info", ".egg-info")):
+            import shutil
+            shutil.rmtree(path)
+PY
 
 LABEL org.opencontainers.image.title="logwatcher" \
       org.opencontainers.image.description="Nightly Docker log analyzer with rule checks, bot detection and Claude-written HTML email reports" \
