@@ -155,3 +155,11 @@ CI runs the same checks on every branch push and pull request, validates `compos
 - `docker logs` only reaches back to when the container was created. After a redeploy (e.g. Watchtower) the report says how many hours the logs cover, and days with under 80% coverage are kept out of the baseline.
 - Mounting `/var/run/docker.sock` gives the container root-equivalent access to the host, even with `:ro`.
 - Cost in `hybrid` mode is a few cents on nights when something is flagged and nothing otherwise.
+
+### Notification guardrails
+
+Warning emails are deduplicated by warning signature for `WARNING_COOLDOWN_HOURS` (default `24`) and limited to `MAX_WARNING_EMAILS_PER_DAY` (default `3`) per application. Identical failure tracebacks have an independent `FAILURE_COOLDOWN_HOURS` (default `24`) cooldown. Delivery history is persisted in `STATE_FILE` after successful SMTP delivery, so normal restarts do not reset suppression. These controls do not prevent reports from being generated or warnings from being logged. Multiple concurrent instances sharing a state file are not supported.
+
+A Claude billing or insufficient-credit error disables subsequent Claude calls using `claude_billing_disabled` in the persistent state file. To resume after replenishing credits, stop Logwatch and remove that state key, then restart. To disable Claude altogether, set `MODE=rules` and remove the API key. For production, set `RUN_ON_START=0`.
+
+The Docker health check uses `HEARTBEAT_FILE` and requires it to be writable by the container. Check `docker inspect <name> --format '{{range .State.Health.Log}}{{println .Output}}{{end}}'` for the actual failure before changing heartbeat paths or permissions.
