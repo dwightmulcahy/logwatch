@@ -85,10 +85,17 @@ jobs:
                   if vuln.get("PkgName", "").lower() in {"certifi", "msgpack", "setuptools", "urllib3"}:
                       print(json.dumps({"target": result.get("Target"), "type": result.get("Type"), "package": vuln.get("PkgName"), "version": vuln.get("InstalledVersion"), "fixed": vuln.get("FixedVersion"), "id": vuln.get("VulnerabilityID"), "layer": vuln.get("Layer")}, sort_keys=True))
           PY
+      - name: Export final container filesystem for security scan
+        run: |
+          container_id=$(docker create "$IMAGE")
+          mkdir -p "$RUNNER_TEMP/logwatch-rootfs"
+          docker export "$container_id" | tar -xf - -C "$RUNNER_TEMP/logwatch-rootfs"
+          docker rm "$container_id"
       - name: Scan image for fixable high and critical vulnerabilities
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ${{ env.IMAGE }}
+          scan-type: rootfs
+          scan-ref: ${{ runner.temp }}/logwatch-rootfs
           format: table
           exit-code: "1"
           ignore-unfixed: true
