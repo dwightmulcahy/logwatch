@@ -18,6 +18,7 @@ import statistics
 import sys
 import time
 import traceback
+import hashlib
 import urllib.request
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
@@ -39,6 +40,9 @@ STATE_FILE = os.getenv("STATE_FILE", "/data/state.json")
 # Touched by the scheduler loop; the Docker HEALTHCHECK fails when it goes stale.
 HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", "/data/heartbeat")
 SEND_IF_CLEAR = os.getenv("SEND_IF_CLEAR", "1") == "1"
+WARNING_COOLDOWN_HOURS = float(os.getenv("WARNING_COOLDOWN_HOURS", "24"))
+MAX_WARNING_EMAILS_PER_DAY = int(os.getenv("MAX_WARNING_EMAILS_PER_DAY", "3"))
+FAILURE_COOLDOWN_HOURS = float(os.getenv("FAILURE_COOLDOWN_HOURS", "24"))
 
 # Per-app identity (defaults keep the original brewwatersolver behaviour)
 APP = os.getenv("APP_NAME", "brewwatersolver")
@@ -141,6 +145,37 @@ def save_state(state):
     with open(tmp, "w") as f:
         json.dump(state, f, indent=1)
     os.replace(tmp, STATE_FILE)
+
+
+# ---------- notification guardrails ----------
+def notification_allowed(state, kind, signature, now, cooldown_hours, daily_limit=None):
+    entries = state.get("notifications", [])
+    if daily_limit is not None and sum(
+        x.get("kind") == kind and x.get("day") == now.date().isoformat() for x in entries
+    ) >= daily_limit:
+        return False
+    for item in entries:
+        if item.get("kind") == kind and item.get("signature") == signature:
+            previous = _ts(item.get("sent_at"))
+            if previous and 0 <= (now - previous).total_seconds() < cooldown_hours * 3600:
+                return False
+    return True
+
+
+def record_notification(state, kind, signature, now):
+    cutoff = now - dt.timedelta(days=7)
+    state["notifications"] = [
+        item for item in state.get("notifications", [])
+        if (previous := _ts(item.get("sent_at"))) and previous >= cutoff
+    ] + [{"kind": kind, "signature": signature, "sent_at": now.isoformat(),
+          "day": now.date().isoformat()}]
+    save_state(state)
+
+
+def claude_billing_failure(error):
+    return any(word in str(error).lower() for word in (
+        "credit balance is too low", "insufficient credits", "billing", "payment required"
+    ))
 
 
 # ---------- collection ----------
@@ -912,19 +947,35 @@ def run_once():
 
     report = rules_report(summary, metrics, flags, meta, start, end)
     claude_text = claude_error = None
-    if MODE == "claude" or (MODE == "hybrid" and w > 0):
+    if not state.get("claude_billing_disabled") and (MODE == "claude" or (MODE == "hybrid" and w > 0)):
         try:
             claude_text = claude_report(meta, summary, metrics, flags, history, kept, start, end)
             report = claude_text + "\n\n---- rule engine ----\n" + report
         except Exception as ex:
             claude_error = str(ex)
+            if claude_billing_failure(ex):
+                state["claude_billing_disabled"] = True
+                save_state(state)
+                print("Claude disabled after billing error", flush=True)
             report = f"[Claude analysis failed: {ex}; rule report follows]\n\n" + report
 
     status_line = next(line for line in report.splitlines() if line.startswith("STATUS:")).replace("STATUS:", "").strip()
     if w > 0 or SEND_IF_CLEAR:
         html = render_html(summary, metrics, flags, meta, start, end, status_line,
                            claude_text, claude_error, coverage_h)
-        send(f"{APP} log report {end:%Y-%m-%d}: {status_line}", report, html)
+        signature = hashlib.sha256(json.dumps(sorted(
+            (level, re.sub(r"\\d+", "#", message)) for level, message in flags
+            if level != "INFO"
+        )).encode()).hexdigest()
+        if w == 0 or notification_allowed(
+            state, "warning", signature, end, WARNING_COOLDOWN_HOURS,
+            MAX_WARNING_EMAILS_PER_DAY,
+        ):
+            send(f"{APP} log report {end:%Y-%m-%d}: {status_line}", report, html)
+            if w > 0:
+                record_notification(state, "warning", signature, end)
+        else:
+            print("warning notification suppressed", flush=True)
 
     if coverage_h >= 0.8 * WINDOW_HOURS:  # partial days would skew the baseline
         state["history"] = (state.get("history", []) + [{"date": end.date().isoformat(), "metrics": metrics}])[-HISTORY_KEEP:]
@@ -970,7 +1021,14 @@ def safe_run():
         err = traceback.format_exc()
         print(err, flush=True)
         try:
-            send(f"{APP} logwatch FAILED", err)
+            state = load_state()
+            now = dt.datetime.now(TZ)
+            signature = hashlib.sha256(err.encode()).hexdigest()
+            if notification_allowed(state, "failure", signature, now, FAILURE_COOLDOWN_HOURS):
+                send(f"{APP} logwatch FAILED", err)
+                record_notification(state, "failure", signature, now)
+            else:
+                print("duplicate failure notification suppressed", flush=True)
         except Exception:
             print(traceback.format_exc(), flush=True)
 
