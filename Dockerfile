@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir --upgrade "setuptools>=78.1.1" \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip check \
-    && python -c 'from importlib.metadata import version; from packaging.version import Version; minimums = {"msgpack": "1.2.3", "urllib3": "2.8.0", "setuptools": "78.1.1"}; assert all(Version(version(name)) >= Version(minimum) for name, minimum in minimums.items()), {name: version(name) for name in minimums}'
+    && python -c 'from importlib.metadata import version; minimums = {"msgpack": (1, 2, 3), "urllib3": (2, 8, 0), "setuptools": (78, 1, 1)}; actual = {name: tuple(map(int, version(name).split(".")[:3])) for name in minimums}; assert all(actual[name] >= minimum for name, minimum in minimums.items()), actual'
 COPY logwatch.py .
 
 LABEL org.opencontainers.image.title="logwatcher" \
