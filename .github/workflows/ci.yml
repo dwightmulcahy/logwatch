@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: "3.14"      # keep in step with the Dockerfile base image
+  PYTHON_VERSION: "3.15"      # keep in step with the Dockerfile base image
   IMAGE: logwatcher:ci
 
 jobs:
