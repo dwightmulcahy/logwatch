@@ -4,8 +4,3 @@
 *.md
 example.docker-compose.yaml
 scripts
-
-tests
-.venv
-__pycache__
-logwatch-data

@@ -1,2 +1,0 @@
--r requirements.txt
-pyflakes>=3.4,<4
