@@ -74,27 +74,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logwatch-rootfs"
           docker export "$container_id" | tar -xf - -C "$RUNNER_TEMP/logwatch-rootfs"
           docker rm "$container_id"
-          find "$RUNNER_TEMP/logwatch-rootfs" -type f -name METADATA -print | grep -E '(certifi|msgpack|setuptools|urllib3)' || true
-      - name: Inspect rootfs scan results
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          scan-type: rootfs
-          scan-ref: ${{ runner.temp }}/logwatch-rootfs
-          format: json
-          output: trivy-rootfs.json
-          exit-code: "0"
-          scanners: vuln
-      - name: Show vulnerability source details
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path("trivy-rootfs.json").read_text())
-          for result in data.get("Results", []):
-              for v in result.get("Vulnerabilities", []):
-                  if v.get("PkgName", "").lower() in {"certifi", "msgpack", "setuptools", "urllib3"}:
-                      print(json.dumps({"target": result.get("Target"), "package": v.get("PkgName"), "version": v.get("InstalledVersion"), "id": v.get("VulnerabilityID"), "layer": v.get("Layer")}, sort_keys=True))
-          PY
       - name: Scan image for fixable high and critical vulnerabilities
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
