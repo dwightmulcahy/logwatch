@@ -12,6 +12,12 @@ RUN python -m pip install --no-cache-dir --upgrade "setuptools>=78.1.1" "certifi
     && python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip check \
     && python -c 'from importlib.metadata import version; minimums = {"msgpack": (1, 2, 3), "urllib3": (2, 8, 0), "setuptools": (78, 1, 1), "certifi": (2026, 10, 18)}; actual = {name: tuple(map(int, version(name).split(".")[:3])) for name in minimums}; assert all(actual[name] >= minimum for name, minimum in minimums.items()), actual'
+# Build tools are not needed at runtime. In particular, pip ships a third-party
+# SPDX SBOM describing vendored libraries, which Trivy can otherwise mistake
+# for the versions of independently installed runtime dependencies.
+RUN python -m pip uninstall --yes setuptools pip \
+    && python -c 'import importlib.util; assert importlib.util.find_spec("pip") is None; assert importlib.util.find_spec("setuptools") is None'
+
 COPY logwatch.py .
 
 # Remove stale package metadata left by the base image's Python installation.
