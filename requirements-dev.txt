@@ -1,4 +1,4 @@
 -r requirements.txt
-pytest>=9.1.1
-ruff>=0.17.2
-pyflakes>=4.0.3
+pytest>=9.2.0
+ruff>=0.17.3
+pyflakes>=4.1.0
