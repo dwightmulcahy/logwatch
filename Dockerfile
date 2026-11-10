@@ -6,6 +6,11 @@ ENV LOGWATCH_VERSION=${VERSION} \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# Debian security fixes published after the base image was built (e.g. apt 3.0.4, CVE-2026-109518)
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir --upgrade "setuptools>=78.1.1" "certifi>=2026.10.18" \
