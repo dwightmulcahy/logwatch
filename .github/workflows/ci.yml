@@ -21,7 +21,7 @@ env:
 jobs:
   test:
     name: Shared Python lint and tests
-    uses: dwightmulcahy/repo-template/.github/workflows/reusable-python-ci.yml@d89e9db45ba77fd32d95da02620476eada9c01cd
+    uses: dwightmulcahy/repo-template/.github/workflows/reusable-python-ci.yml@1b2a8ace955cd3a6d0641017aa8e4d621a183c21
     with:
       python-version: '3.14'
       install-command: pip install -r requirements-dev.txt
