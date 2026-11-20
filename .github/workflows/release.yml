@@ -105,7 +105,7 @@ jobs:
             type=raw,value=${{ needs.prepare.outputs.major }},enable=${{ needs.prepare.outputs.is_major }}
             type=raw,value=latest,enable=${{ needs.prepare.outputs.is_latest }}
       - name: Build and push
-        uses: dwightmulcahy/repo-template/.github/actions/docker-publish@1b2a8ace955cd3a6d0641017aa8e4d621a183c21
+        uses: dwightmulcahy/repo-template/.github/actions/docker-publish@f508f4b91a429dcbe7cfa6cdb6205f8d90f28042
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -132,7 +132,7 @@ jobs:
           fetch-depth: 0
       - name: Generate standard stable release notes
         if: needs.prepare.outputs.prerelease != 'true'
-        uses: dwightmulcahy/repo-template/.github/actions/release-notes@1b2a8ace955cd3a6d0641017aa8e4d621a183c21
+        uses: dwightmulcahy/repo-template/.github/actions/release-notes@f508f4b91a429dcbe7cfa6cdb6205f8d90f28042
         with:
           tag: ${{ needs.prepare.outputs.tag }}
           project-name: Logwatch
